@@ -39,3 +39,13 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Local Whisper model (too large for GitHub - download manually)
+backend/local_whisper_model/
+
+# Python / Backend
+backend/venv/
+backend/__pycache__/
+**/__pycache__/
+*.pyc
+*.db
