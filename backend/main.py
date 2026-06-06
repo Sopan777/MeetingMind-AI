@@ -29,6 +29,15 @@ session_manager = AudioSessionManager()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting up MeetingMind AI WebSocket Server...")
+    
+    # Create all database tables if they don't exist
+    from core.database import engine
+    from app.database import Base
+    from app import models  # noqa: F401 — ensure all models are registered
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    logger.info("Database tables verified/created.")
+    
     # Health check providers on startup
     transcriber = create_transcription_provider()
     analyzer = create_analyzer_provider()
@@ -149,16 +158,22 @@ async def websocket_analyze(websocket: WebSocket):
                                 "data": transcript_data,
                             })
                             
-                            # Persist
-                            await persistence.save_transcript(
-                                current_meeting_id, timestamp, "Speaker", result.text
-                            )
+                            # Persist (non-blocking — DB errors must never break the real-time pipeline)
+                            try:
+                                await persistence.save_transcript(
+                                    current_meeting_id, timestamp, "Speaker", result.text
+                                )
+                            except Exception as db_err:
+                                logger.warning(f"DB save failed (non-critical): {db_err}")
                             
                             session.total_audio_seconds += result.duration_seconds
                             
                             # Trigger analysis if threshold reached
                             if session.utterance_count % settings.ANALYSIS_UTTERANCE_THRESHOLD == 0:
-                                await trigger_analysis(analyzer_provider, context_manager, persistence, websocket, current_meeting_id)
+                                try:
+                                    await trigger_analysis(analyzer_provider, context_manager, persistence, websocket, current_meeting_id)
+                                except Exception as analysis_err:
+                                    logger.warning(f"Analysis failed (non-critical): {analysis_err}")
                                 
                         await websocket.send_json({"type": "status", "status": "recording"})
                         

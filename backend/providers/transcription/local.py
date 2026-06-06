@@ -1,8 +1,22 @@
 import io
+import os
+import sys
 import wave
 import logging
 import asyncio
 from typing import Optional, Dict, Any
+
+# Register NVIDIA CUDA DLL directories so CTranslate2 can find cublas64_12.dll
+# The nvidia-cublas-cu12 pip package installs DLLs in a non-standard location
+_venv_nvidia_dirs = [
+    os.path.join(sys.prefix, "Lib", "site-packages", "nvidia", "cublas", "bin"),
+    os.path.join(sys.prefix, "Lib", "site-packages", "nvidia", "cudnn", "bin"),
+    os.path.join(sys.prefix, "Lib", "site-packages", "nvidia", "cuda_nvrtc", "bin"),
+]
+for _dll_dir in _venv_nvidia_dirs:
+    if os.path.isdir(_dll_dir):
+        os.add_dll_directory(_dll_dir)
+        os.environ["PATH"] = _dll_dir + os.pathsep + os.environ.get("PATH", "")
 
 from core.config import settings
 from schemas.transcription import TranscriptionResult
