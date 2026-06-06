@@ -1,13 +1,14 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { MeetingTopBar } from "@/components/MeetingTopBar";
 import { SharedScreenPanel } from "@/components/SharedScreenPanel";
 import { TranscriptPanel } from "@/components/TranscriptPanel";
 import { InsightsPanels } from "@/components/InsightsPanels";
 import { LiveSummaryPanel } from "@/components/LiveSummaryPanel";
 import { useMeetingAnalysis } from "@/hooks/useMeetingAnalysis";
-import { AudioCapture, requestScreenShare } from "@/lib/audioCapture";
+import { useVAD } from "@/hooks/useVAD";
+import { requestScreenShare } from "@/lib/audioCapture"; // Only used for getting the stream now
 
 export default function AnalysisPage() {
   const [stream, setStream] = useState<MediaStream | null>(null);
@@ -15,16 +16,25 @@ export default function AnalysisPage() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [audioWarning, setAudioWarning] = useState<string | null>(null);
 
-  const audioCaptureRef = useRef<AudioCapture | null>(null);
-
   const {
     status,
     transcript,
     insights,
     connect,
     disconnect,
-    sendAudio,
+    sendUtterance,
   } = useMeetingAnalysis();
+
+  const {
+    start: startVAD,
+    stop: stopVAD,
+    isSpeaking,
+    error: vadError
+  } = useVAD({
+    onUtterance: (wavBuffer) => {
+      sendUtterance(wavBuffer);
+    }
+  });
 
   const handleShareScreen = useCallback(async () => {
     setAudioWarning(null);
@@ -63,51 +73,44 @@ export default function AnalysisPage() {
     }
   }, [stream, isAnalyzing]);
 
-  const handleStartAnalysis = useCallback(() => {
+  const handleStartAnalysis = useCallback(async () => {
     if (!stream) return;
 
     // Connect WebSocket
     connect();
-
-    // Start audio capture
-    const capture = new AudioCapture({
-      onAudioChunk: (chunk) => {
-        sendAudio(chunk);
-      },
-      chunkInterval: 2000,
-    });
-
-    const started = capture.start(stream);
-
-    if (!started) {
-      setAudioWarning(
-        "Could not start audio capture. Make sure to check \"Share tab audio\" when sharing your screen."
-      );
-      return;
+    
+    // Start VAD pipeline
+    const success = await startVAD(stream);
+    
+    if (success) {
+      setIsAnalyzing(true);
+      setAudioWarning(null);
+    } else {
+      // vadError state will be set by the hook, but we can clear the UI state
+      setIsAnalyzing(false);
+      disconnect();
     }
-
-    audioCaptureRef.current = capture;
-    setIsAnalyzing(true);
-  }, [stream, connect, sendAudio]);
+  }, [stream, connect, disconnect, startVAD]);
 
   const handleStopAnalysis = useCallback(() => {
-    // Stop audio capture
-    if (audioCaptureRef.current) {
-      audioCaptureRef.current.stop();
-      audioCaptureRef.current = null;
-    }
-
-    // Disconnect WebSocket
+    stopVAD();
     disconnect();
     setIsAnalyzing(false);
-  }, [disconnect]);
+  }, [stopVAD, disconnect]);
+
+  // Combine websocket status with VAD status for the UI
+  let displayStatus = isAnalyzing ? status : isSharing ? "connected" : "ready";
+  if (displayStatus === "ready" && isAnalyzing) {
+      displayStatus = "connecting";
+  }
 
   return (
     <div className="flex flex-col h-screen">
       <MeetingTopBar
-        status={isAnalyzing ? status : isSharing ? "connected" : "ready"}
+        status={displayStatus as any}
         isSharing={isSharing}
         isAnalyzing={isAnalyzing}
+        isSpeaking={isSpeaking}
         onShareScreen={handleShareScreen}
         onStopSharing={handleStopSharing}
         onStartAnalysis={handleStartAnalysis}

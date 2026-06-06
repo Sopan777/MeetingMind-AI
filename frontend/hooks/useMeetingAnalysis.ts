@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { MeetingWebSocketClient } from "../lib/websocketClient";
 
 interface TranscriptSegment {
   timestamp: string;
@@ -32,13 +33,14 @@ interface MeetingInsights {
 }
 
 interface UseMeetingAnalysisReturn {
-  status: "ready" | "connected" | "recording" | "processing";
+  status: "ready" | "connected" | "recording" | "processing" | "reconnecting" | "disconnected";
   transcript: TranscriptSegment[];
   insights: MeetingInsights;
   isConnected: boolean;
-  connect: () => void;
+  connect: (meetingId?: string) => void;
   disconnect: () => void;
-  sendAudio: (chunk: ArrayBuffer) => void;
+  sendUtterance: (wavBuffer: ArrayBuffer) => void;
+  requestAnalysis: () => void;
 }
 
 const EMPTY_INSIGHTS: MeetingInsights = {
@@ -51,78 +53,44 @@ const EMPTY_INSIGHTS: MeetingInsights = {
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000/ws/analyze";
 
 export function useMeetingAnalysis(): UseMeetingAnalysisReturn {
-  const [status, setStatus] = useState<"ready" | "connected" | "recording" | "processing">("ready");
+  const [status, setStatus] = useState<"ready" | "connected" | "recording" | "processing" | "reconnecting" | "disconnected">("ready");
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
   const [insights, setInsights] = useState<MeetingInsights>(EMPTY_INSIGHTS);
-  const [isConnected, setIsConnected] = useState(false);
-
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
+  const clientRef = useRef<MeetingWebSocketClient | null>(null);
 
   const cleanup = useCallback(() => {
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-      reconnectTimeoutRef.current = null;
+    if (clientRef.current) {
+      clientRef.current.disconnect();
+      clientRef.current = null;
     }
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-    setIsConnected(false);
     setStatus("ready");
   }, []);
 
-  const connect = useCallback(() => {
+  const connect = useCallback((meetingId?: string) => {
     cleanup();
 
-    const ws = new WebSocket(WS_URL);
-    wsRef.current = ws;
+    const id = meetingId || crypto.randomUUID();
 
-    ws.onopen = () => {
-      setIsConnected(true);
-      setStatus("connected");
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-
-        switch (msg.type) {
-          case "status":
-            if (msg.status === "recording" || msg.status === "processing" || msg.status === "connected") {
-              setStatus(msg.status);
-            }
-            break;
-
-          case "transcript":
-            setTranscript((prev) => [...prev, msg.data]);
-            break;
-
-          case "insights":
-            setInsights(msg.data);
-            break;
-
-          case "pong":
-            // heartbeat response
-            break;
-
-          case "error":
-            console.error("Server error:", msg.message);
-            break;
-        }
-      } catch (e) {
-        console.error("Failed to parse WebSocket message:", e);
+    const client = new MeetingWebSocketClient({
+      url: WS_URL,
+      meetingId: id,
+      onTranscript: (data) => {
+        setTranscript((prev) => [...prev, data]);
+      },
+      onInsights: (data) => {
+        setInsights(data);
+      },
+      onStatus: (newStatus) => {
+        setStatus(newStatus as any);
+      },
+      onError: (err) => {
+        console.error("Analysis Error:", err);
       }
-    };
+    });
 
-    ws.onclose = () => {
-      setIsConnected(false);
-      setStatus("ready");
-    };
-
-    ws.onerror = (error) => {
-      console.error("WebSocket error:", error);
-    };
+    clientRef.current = client;
+    client.connect();
   }, [cleanup]);
 
   const disconnect = useCallback(() => {
@@ -131,9 +99,15 @@ export function useMeetingAnalysis(): UseMeetingAnalysisReturn {
     setInsights(EMPTY_INSIGHTS);
   }, [cleanup]);
 
-  const sendAudio = useCallback((chunk: ArrayBuffer) => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(chunk);
+  const sendUtterance = useCallback((wavBuffer: ArrayBuffer) => {
+    if (clientRef.current) {
+      clientRef.current.sendUtterance(wavBuffer);
+    }
+  }, []);
+
+  const requestAnalysis = useCallback(() => {
+    if (clientRef.current) {
+      clientRef.current.requestAnalysis();
     }
   }, []);
 
@@ -144,26 +118,14 @@ export function useMeetingAnalysis(): UseMeetingAnalysisReturn {
     };
   }, [cleanup]);
 
-  // Heartbeat
-  useEffect(() => {
-    if (!isConnected) return;
-
-    const interval = setInterval(() => {
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: "ping" }));
-      }
-    }, 30000);
-
-    return () => clearInterval(interval);
-  }, [isConnected]);
-
   return {
     status,
     transcript,
     insights,
-    isConnected,
+    isConnected: status === "connected" || status === "recording" || status === "processing",
     connect,
     disconnect,
-    sendAudio,
+    sendUtterance,
+    requestAnalysis,
   };
 }

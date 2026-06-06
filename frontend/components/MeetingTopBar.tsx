@@ -4,9 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 
 interface MeetingTopBarProps {
-  status: "ready" | "recording" | "processing" | "connected";
+  status: "ready" | "recording" | "processing" | "connected" | "connecting" | "reconnecting" | "disconnected";
   isSharing: boolean;
   isAnalyzing: boolean;
+  isSpeaking?: boolean;
   onShareScreen: () => void;
   onStopSharing: () => void;
   onStartAnalysis: () => void;
@@ -18,21 +19,25 @@ const statusConfig: Record<
   { color: string; label: string }
 > = {
   ready: { color: "bg-gray-400", label: "Ready" },
-  recording: { color: "bg-green-500", label: "Recording" },
-  processing: { color: "bg-yellow-500", label: "Processing" },
+  connecting: { color: "bg-blue-400", label: "Connecting..." },
   connected: { color: "bg-blue-500", label: "Connected" },
+  recording: { color: "bg-green-500", label: "Listening" },
+  processing: { color: "bg-yellow-500", label: "Processing" },
+  reconnecting: { color: "bg-orange-500", label: "Reconnecting..." },
+  disconnected: { color: "bg-red-500", label: "Disconnected" },
 };
 
 export function MeetingTopBar({
   status,
   isSharing,
   isAnalyzing,
+  isSpeaking,
   onShareScreen,
   onStopSharing,
   onStartAnalysis,
   onStopAnalysis,
 }: MeetingTopBarProps) {
-  const { color, label } = statusConfig[status];
+  const { color, label } = statusConfig[status] || statusConfig.ready;
 
   return (
     <div className="flex items-center justify-between bg-card border-b border-border px-6 py-3">
@@ -40,12 +45,20 @@ export function MeetingTopBar({
         <span className="text-base font-semibold tracking-tight text-foreground">
           MeetingMind AI
         </span>
-        <Badge variant="outline" className="gap-1.5">
+        <Badge variant="outline" className="gap-1.5 flex items-center">
           <span
             className={`inline-block h-2 w-2 rounded-full ${color}`}
             aria-hidden="true"
           />
           {label}
+          
+          {/* Active Speaking Indicator */}
+          {isAnalyzing && isSpeaking && (
+            <span className="ml-2 flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-2 w-2 rounded-full bg-green-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+            </span>
+          )}
         </Badge>
       </div>
 
@@ -62,7 +75,7 @@ export function MeetingTopBar({
               strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
-              data-icon="inline-start"
+              className="mr-2"
             >
               <rect x="2" y="3" width="20" height="14" rx="2" />
               <line x1="8" y1="21" x2="16" y2="21" />
@@ -83,7 +96,7 @@ export function MeetingTopBar({
               strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
-              data-icon="inline-start"
+              className="mr-2"
             >
               <rect x="2" y="3" width="20" height="14" rx="2" />
               <line x1="8" y1="21" x2="16" y2="21" />
@@ -105,7 +118,7 @@ export function MeetingTopBar({
               strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
-              data-icon="inline-start"
+              className="mr-2"
             >
               <rect x="6" y="6" width="12" height="12" rx="2" />
             </svg>
@@ -128,7 +141,7 @@ export function MeetingTopBar({
               strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
-              data-icon="inline-start"
+              className="mr-2"
             >
               <polygon points="6 3 20 12 6 21 6 3" />
             </svg>

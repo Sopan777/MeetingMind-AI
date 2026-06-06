@@ -1,21 +1,49 @@
 import asyncio
 import json
 import logging
-import os
+from contextlib import asynccontextmanager
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from services.llm_analyzer import LLMAnalyzer
-from services.transcription import TranscriptionService
+from core.config import settings
+from core.logging import setup_logging
+from core.database import AsyncSessionLocal
+from schemas.websocket import AudioMessage, ControlMessage
+from providers.transcription.factory import create_transcription_provider
+from providers.analysis.factory import create_analyzer_provider
+from services.transcript_context import TranscriptContextManager
+from services.audio_session import AudioSessionManager
+from services.persistence import PersistenceService
 
-load_dotenv()
+# Import the existing REST app to mount it
+from app.main import app as rest_app
 
-logging.basicConfig(level=logging.INFO)
+# Set up structured logging
+setup_logging(settings.LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="MeetingMind AI", version="0.1.0")
+# Global session manager
+session_manager = AudioSessionManager()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Starting up MeetingMind AI WebSocket Server...")
+    # Health check providers on startup
+    transcriber = create_transcription_provider()
+    analyzer = create_analyzer_provider()
+    logger.info(f"Transcriber health: {await transcriber.health_check()}")
+    logger.info(f"Analyzer health: {await analyzer.health_check()}")
+    
+    yield
+    
+    logger.info("Shutting down...")
+
+# Main FastAPI application for WebSockets
+app = FastAPI(title="MeetingMind AI - Realtime", version="2.0.0", lifespan=lifespan)
+
+# Mount the REST API
+app.mount("/api", rest_app)
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,116 +53,150 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-def create_transcription_service() -> TranscriptionService:
-    api_key = os.getenv("WHISPER_API_KEY", "")
-    api_url = os.getenv("WHISPER_API_URL", "https://api.openai.com/v1")
-    return TranscriptionService(api_key=api_key, api_url=api_url)
-
-
-def create_llm_analyzer() -> LLMAnalyzer:
-    api_key = os.getenv("NVIDIA_API_KEY", "")
-    api_url = os.getenv("NVIDIA_API_URL", "https://integrate.api.nvidia.com/v1")
-    model = os.getenv("NVIDIA_MODEL", "nvidia/llama-3.3-nemotron-super-49b-v1")
-    return LLMAnalyzer(api_key=api_key, api_url=api_url, model=model)
-
-
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
-
+    return {"status": "ok", "version": "2.0.0"}
 
 @app.websocket("/ws/analyze")
 async def websocket_analyze(websocket: WebSocket):
-    """Main WebSocket endpoint for real-time meeting analysis.
-
-    Protocol:
-    - Client sends binary frames containing audio chunks (webm/opus).
-    - Server sends JSON text frames with transcript updates and insights.
-
-    Server messages have the shape:
-      { "type": "transcript", "data": { "timestamp": "...", "speaker": "...", "text": "..." } }
-      { "type": "insights", "data": { "action_items": [...], "decisions": [...], "risks": [...], "summary": "..." } }
-      { "type": "error", "message": "..." }
-      { "type": "status", "status": "connected" | "processing" }
+    """
+    Main WebSocket endpoint for real-time meeting analysis using VAD utterance chunks.
     """
     await websocket.accept()
     logger.info("WebSocket client connected")
 
-    transcription_service = create_transcription_service()
-    llm_analyzer = create_llm_analyzer()
-
-    # Send initial connected status
-    await websocket.send_json({"type": "status", "status": "connected"})
-
-    # Background task: periodically run LLM analysis
-    analysis_running = True
-
-    async def run_periodic_analysis():
-        while analysis_running:
-            await asyncio.sleep(5)
-            if llm_analyzer.should_analyze():
-                try:
-                    insights = await llm_analyzer.analyze()
-                    if insights:
-                        await websocket.send_json({
-                            "type": "insights",
-                            "data": insights.model_dump(),
-                        })
-                except Exception as e:
-                    logger.error(f"Analysis task error: {e}")
-
-    analysis_task = asyncio.create_task(run_periodic_analysis())
-
+    # Initialize providers per connection (they are lightweight wrappers)
+    transcription_provider = create_transcription_provider()
+    analyzer_provider = create_analyzer_provider()
+    context_manager = TranscriptContextManager()
+    
+    current_meeting_id = None
+    
     try:
+        # Wait for initial connect message
         while True:
-            # Receive binary audio data from client
             data = await websocket.receive()
-
-            if "bytes" in data and data["bytes"]:
-                audio_chunk = data["bytes"]
-
-                # Each chunk from the frontend is a complete, self-contained
-                # audio file (WebM with headers), so transcribe it directly.
-                await websocket.send_json({"type": "status", "status": "processing"})
-
-                result = await transcription_service.transcribe(audio_chunk)
-
-                if result:
-                    # Send transcript to client
-                    await websocket.send_json({
-                        "type": "transcript",
-                        "data": result,
-                    })
-
-                    # Feed transcript to LLM analyzer
-                    llm_analyzer.add_transcript(result)
-
-                await websocket.send_json({"type": "status", "status": "recording"})
-
-            elif "text" in data and data["text"]:
-                # Handle text messages (e.g., control commands)
+            if "text" in data:
                 try:
                     msg = json.loads(data["text"])
+                    if msg.get("type") == "start" and msg.get("meeting_id"):
+                        current_meeting_id = msg["meeting_id"]
+                        await session_manager.get_session(current_meeting_id)
+                        await websocket.send_json({"type": "status", "status": "connected"})
+                        logger.info(f"Session started for meeting {current_meeting_id}")
+                        break
+                    elif msg.get("type") == "ping":
+                        await websocket.send_json({"type": "pong"})
+                except Exception as e:
+                    logger.warning(f"Error parsing initial WS message: {e}")
+            else:
+                logger.warning("Received binary data before start control message")
+                
+        # Main event loop
+        db_session = AsyncSessionLocal()
+        persistence = PersistenceService(db_session)
+        
+        while True:
+            data = await websocket.receive()
+            
+            if "text" in data:
+                try:
+                    msg = json.loads(data["text"])
+                    
                     if msg.get("type") == "ping":
                         await websocket.send_json({"type": "pong"})
-                except json.JSONDecodeError:
-                    pass
-
+                        
+                    elif msg.get("type") == "audio":
+                        # Metadata for the following binary frame
+                        seq = msg.get("sequence", 0)
+                        timestamp = msg.get("timestamp", "")
+                        
+                        # Wait for the actual audio binary frame
+                        bin_data = await websocket.receive()
+                        if "bytes" not in bin_data:
+                            logger.error("Expected binary audio frame after audio metadata")
+                            continue
+                            
+                        audio_chunk = bin_data["bytes"]
+                        
+                        session = await session_manager.get_session(current_meeting_id)
+                        
+                        # Validate sequence to prevent duplicates
+                        if not session.validate_sequence(seq):
+                            continue
+                            
+                        session.last_sequence = max(session.last_sequence, seq)
+                        session.utterance_count += 1
+                        
+                        # Process audio
+                        await websocket.send_json({"type": "status", "status": "processing"})
+                        
+                        prompt = context_manager.get_prompt()
+                        result = await transcription_provider.transcribe(audio_chunk, prompt)
+                        
+                        if result:
+                            # Update context and send to client
+                            context_manager.add(result.text)
+                            
+                            transcript_data = {
+                                "timestamp": timestamp,
+                                "speaker": "Speaker",
+                                "text": result.text,
+                            }
+                            
+                            await websocket.send_json({
+                                "type": "transcript",
+                                "data": transcript_data,
+                            })
+                            
+                            # Persist
+                            await persistence.save_transcript(
+                                current_meeting_id, timestamp, "Speaker", result.text
+                            )
+                            
+                            session.total_audio_seconds += result.duration_seconds
+                            
+                            # Trigger analysis if threshold reached
+                            if session.utterance_count % settings.ANALYSIS_UTTERANCE_THRESHOLD == 0:
+                                await trigger_analysis(analyzer_provider, context_manager, persistence, websocket, current_meeting_id)
+                                
+                        await websocket.send_json({"type": "status", "status": "recording"})
+                        
+                    elif msg.get("type") == "analyze_now":
+                        await trigger_analysis(analyzer_provider, context_manager, persistence, websocket, current_meeting_id)
+                        
+                    elif msg.get("type") == "stop":
+                        logger.info(f"Client requested stop for meeting {current_meeting_id}")
+                        break
+                        
+                except Exception as e:
+                    logger.error(f"Error processing WS text frame: {e}")
+                    
     except WebSocketDisconnect:
-        logger.info("WebSocket client disconnected")
+        logger.info(f"WebSocket disconnected (meeting {current_meeting_id})")
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
     finally:
-        analysis_running = False
-        analysis_task.cancel()
-        try:
-            await analysis_task
-        except asyncio.CancelledError:
-            pass
+        if current_meeting_id:
+            await session_manager.end_session(current_meeting_id)
+        if 'db_session' in locals():
+            await db_session.close()
 
+async def trigger_analysis(analyzer, context_manager, persistence, websocket, meeting_id):
+    """Helper to run analysis and send results."""
+    full_text = context_manager.get_prompt()
+    if not full_text:
+        return
+        
+    insights = await analyzer.analyze(full_text)
+    if insights:
+        await websocket.send_json({
+            "type": "insights",
+            "data": insights.model_dump(),
+        })
+        await persistence.update_meeting_insights(meeting_id, insights)
 
 if __name__ == "__main__":
     import uvicorn
-
+    # In production, run with: uvicorn main:app --host 0.0.0.0 --port 8000
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
