@@ -37,59 +37,70 @@ class Meeting(Base):
     file_path = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     user = relationship("User", back_populates="meetings")
-    transcripts = relationship("Transcript", back_populates="meeting")
-    action_items = relationship("ActionItem", back_populates="meeting")
-    decisions = relationship("Decision", back_populates="meeting")
-    risks = relationship("Risk", back_populates="meeting")
+    events = relationship("MeetingEvent", back_populates="meeting")
+    snapshots = relationship("AnalyzerSnapshot", back_populates="meeting")
 
 
-class Transcript(Base):
-    __tablename__ = "transcripts"
+class MeetingEvent(Base):
+    __tablename__ = "meeting_events"
     id = Column(String, primary_key=True)
-    meeting_id = Column(String, ForeignKey("meetings.id"), nullable=False)
-    speaker = Column(String, nullable=False)
-    timestamp = Column(String, nullable=False)
-    text = Column(Text, nullable=False)
-    meeting = relationship("Meeting", back_populates="transcripts")
+    meeting_id = Column(String, ForeignKey("meetings.id"), nullable=False, index=True)
+    event_type = Column(String, nullable=False, index=True)  # speech, visual, insight, system
+    sequence = Column(Integer, nullable=False, index=True)
+    timestamp_utc = Column(DateTime, default=datetime.datetime.utcnow, index=True)
+    
+    # Speech fields
+    speaker_label = Column(String, nullable=True)
+    text = Column(Text, nullable=True)
+    speech_start_ms = Column(Integer, nullable=True)
+    speech_end_ms = Column(Integer, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    confidence = Column(Float, nullable=True)
+    language = Column(String, nullable=True)
+    
+    # Visual fields
+    screenshot_path = Column(String, nullable=True)
+    content_type = Column(String, nullable=True)
+    description = Column(Text, nullable=True)
+    perceptual_hash = Column(String, nullable=True)
+    
+    # Insight fields
+    insight_type = Column(String, nullable=True)
+    content_json = Column(Text, nullable=True)
+    
+    # System fields
+    system_event = Column(String, nullable=True)
+    metadata_json = Column(Text, nullable=True)
+
+    meeting = relationship("Meeting", back_populates="events")
 
 
-class ActionItem(Base):
-    __tablename__ = "action_items"
+class AnalyzerSnapshot(Base):
+    __tablename__ = "analyzer_snapshots"
     id = Column(String, primary_key=True)
-    meeting_id = Column(String, ForeignKey("meetings.id"), nullable=False)
-    task = Column(String, nullable=False)
-    owner = Column(String, nullable=False)
-    deadline = Column(String, nullable=False)
-    status = Column(String, default="todo")
-    priority = Column(String, default="medium")
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
-    meeting = relationship("Meeting", back_populates="action_items")
+    meeting_id = Column(String, ForeignKey("meetings.id"), nullable=False, index=True)
+    timestamp_utc = Column(DateTime, default=datetime.datetime.utcnow)
+    channel = Column(String, nullable=False)  # extraction or summary
+    
+    prompt_text = Column(Text, nullable=False)
+    prompt_tokens = Column(Integer, nullable=True)
+    
+    response_text = Column(Text, nullable=True)
+    response_tokens = Column(Integer, nullable=True)
+    
+    action_items_json = Column(Text, nullable=True)
+    decisions_json = Column(Text, nullable=True)
+    risks_json = Column(Text, nullable=True)
+    summary_text = Column(Text, nullable=True)
+    
+    latency_ms = Column(Integer, nullable=True)
+    model_name = Column(String, nullable=True)
+    cost_estimate = Column(Float, nullable=True)
+    
+    event_seq_start = Column(Integer, nullable=True)
+    event_seq_end = Column(Integer, nullable=True)
 
-
-class Decision(Base):
-    __tablename__ = "decisions"
-    id = Column(String, primary_key=True)
-    meeting_id = Column(String, ForeignKey("meetings.id"), nullable=False)
-    title = Column(String, nullable=False)
-    description = Column(Text, nullable=False)
-    decided_by = Column(String, nullable=False)
-    impact = Column(String, default="medium")
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
-    meeting = relationship("Meeting", back_populates="decisions")
-
-
-class Risk(Base):
-    __tablename__ = "risks"
-    id = Column(String, primary_key=True)
-    meeting_id = Column(String, ForeignKey("meetings.id"), nullable=False)
-    title = Column(String, nullable=False)
-    description = Column(Text, nullable=False)
-    severity = Column(String, default="medium")
-    impact = Column(Text, nullable=True)
-    recommendation = Column(Text, nullable=True)
-    detected_phrase = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
-    meeting = relationship("Meeting", back_populates="risks")
+    meeting = relationship("Meeting", back_populates="snapshots")
 
 
 class Notification(Base):

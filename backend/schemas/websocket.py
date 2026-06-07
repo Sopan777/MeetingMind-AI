@@ -7,7 +7,8 @@ class AudioMessage(BaseModel):
     type: str = "audio"
     meeting_id: Optional[str] = None
     sequence: int
-    timestamp: str
+    speech_start_ms: int
+    speech_end_ms: int
 
 class ControlMessage(BaseModel):
     type: str  # 'ping', 'start', 'stop', 'analyze_now'

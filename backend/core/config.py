@@ -24,10 +24,21 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     
     # Application tuning
-    TRANSCRIPT_CONTEXT_CHARS: int = 200
-    ANALYSIS_INTERVAL_SECONDS: int = 30
-    ANALYSIS_UTTERANCE_THRESHOLD: int = 15
     MAX_UTTERANCE_DURATION_SECONDS: int = 15
+    
+    # Timeline settings
+    TIMELINE_MAX_EVENTS: int = 5000
+    
+    # Analyzer scheduler
+    EXTRACTION_UTTERANCE_THRESHOLD: int = 15
+    SUMMARY_UTTERANCE_THRESHOLD: int = 45
+    ANALYZER_MIN_INTERVAL_SECONDS: int = 20
+    
+    # Context builder
+    TIER1_MAX_EVENTS: int = 20
+    TIER1_MAX_AGE_SECONDS: int = 300
+    TIER2_MAX_TOKENS: int = 600
+    TIER3_MAX_TOKENS: int = 500
     
     # Security
     SECRET_KEY: str = "change-in-production"

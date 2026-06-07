@@ -16,85 +16,42 @@ class PersistenceService:
     def __init__(self, db: AsyncSession):
         self.db = db
         
-    async def save_transcript(self, meeting_id: str, timestamp: str, speaker: str, text: str) -> models.Transcript:
-        """Save a new transcript segment."""
-        transcript = models.Transcript(
-            id=str(uuid.uuid4()),
-            meeting_id=meeting_id,
-            speaker=speaker,
-            timestamp=timestamp,
-            text=text
+    async def save_event(self, event) -> None:
+        """
+        Saves a single meeting event to the database.
+        Note: event should be the Pydantic model schemas.events.MeetingEvent
+        """
+        db_event = MeetingEvent(
+            id=event.id,
+            meeting_id=event.meeting_id,
+            event_type=event.event_type.value if hasattr(event.event_type, "value") else event.event_type,
+            sequence=event.sequence,
+            timestamp_utc=datetime.fromisoformat(event.timestamp_utc.replace('Z', '+00:00')) if isinstance(event.timestamp_utc, str) else event.timestamp_utc,
+            
+            speaker_label=event.speaker_label,
+            text=event.text,
+            speech_start_ms=event.speech_start_ms,
+            speech_end_ms=event.speech_end_ms,
+            duration_ms=event.duration_ms,
+            confidence=event.confidence,
+            language=event.language,
+            
+            screenshot_path=event.screenshot_path,
+            content_type=event.content_type,
+            description=event.description,
+            perceptual_hash=event.perceptual_hash,
+            
+            insight_type=event.insight_type.value if hasattr(event.insight_type, "value") else event.insight_type,
+            content_json=event.content_json,
+            
+            system_event=event.system_event,
+            metadata_json=event.metadata_json
         )
-        self.db.add(transcript)
-        await self.db.commit()
-        await self.db.refresh(transcript)
-        return transcript
         
-    async def update_meeting_insights(self, meeting_id: str, insights: MeetingInsights):
-        """Update meeting insights, avoiding duplicates where possible."""
+        self.db.add(db_event)
         try:
-            # Note: A more robust implementation would diff the insights and only insert new ones.
-            # For simplicity in this real-time update, we'll append new ones based on simple heuristics
-            # or just rely on the frontend to display the latest payload.
-            
-            # Save new action items (simple deduplication by exact task string)
-            existing_actions_query = await self.db.execute(
-                select(models.ActionItem.task).where(models.ActionItem.meeting_id == meeting_id)
-            )
-            existing_actions = {row[0] for row in existing_actions_query.all()}
-            
-            for ai in insights.action_items:
-                if ai.task not in existing_actions:
-                    new_item = models.ActionItem(
-                        id=str(uuid.uuid4()),
-                        meeting_id=meeting_id,
-                        task=ai.task,
-                        owner=ai.owner,
-                        deadline=ai.deadline,
-                        status="todo",
-                        priority="medium"
-                    )
-                    self.db.add(new_item)
-                    existing_actions.add(ai.task)
-            
-            # Save new decisions
-            existing_dec_query = await self.db.execute(
-                select(models.Decision.title).where(models.Decision.meeting_id == meeting_id)
-            )
-            existing_decs = {row[0] for row in existing_dec_query.all()}
-            
-            for dec in insights.decisions:
-                if dec.decision not in existing_decs:
-                    new_dec = models.Decision(
-                        id=str(uuid.uuid4()),
-                        meeting_id=meeting_id,
-                        title=dec.decision[:50] + "..." if len(dec.decision) > 50 else dec.decision,
-                        description=dec.decision,
-                        decided_by="Meeting",
-                        impact="medium"
-                    )
-                    self.db.add(new_dec)
-                    existing_decs.add(dec.decision)
-                    
-            # Save new risks
-            existing_risk_query = await self.db.execute(
-                select(models.Risk.title).where(models.Risk.meeting_id == meeting_id)
-            )
-            existing_risks = {row[0] for row in existing_risk_query.all()}
-            
-            for risk in insights.risks:
-                if risk.description not in existing_risks:
-                    new_risk = models.Risk(
-                        id=str(uuid.uuid4()),
-                        meeting_id=meeting_id,
-                        title=risk.description[:50] + "..." if len(risk.description) > 50 else risk.description,
-                        description=risk.description,
-                        severity="medium"
-                    )
-                    self.db.add(new_risk)
-                    existing_risks.add(risk.description)
-                    
             await self.db.commit()
         except Exception as e:
-            logger.error(f"Error persisting insights for meeting {meeting_id}: {e}")
             await self.db.rollback()
+            logger.error(f"Failed to persist event: {e}")
+            raise

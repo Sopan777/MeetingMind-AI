@@ -20,7 +20,7 @@ export class MeetingWebSocketClient {
   private reconnectDelays = [1000, 2000, 4000, 8000, 10000];
   
   private heartbeatInterval: NodeJS.Timeout | null = null;
-  private pendingUtterances: Array<{ buffer: ArrayBuffer; timestamp: string }> = [];
+  private pendingUtterances: Array<{ buffer: ArrayBuffer; speechStartMs: number; speechEndMs: number }> = [];
 
   constructor(options: WSClientOptions) {
     this.options = options;
@@ -143,9 +143,7 @@ export class MeetingWebSocketClient {
     }
   }
 
-  public sendUtterance(wavBuffer: ArrayBuffer) {
-    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    
+  public sendUtterance(wavBuffer: ArrayBuffer, speechStartMs: number, speechEndMs: number) {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.sequence++;
       
@@ -154,14 +152,15 @@ export class MeetingWebSocketClient {
         type: 'audio',
         meeting_id: this.options.meetingId,
         sequence: this.sequence,
-        timestamp
+        speech_start_ms: speechStartMs,
+        speech_end_ms: speechEndMs
       }));
       
       // 2. Send binary audio frame
       this.ws.send(wavBuffer);
     } else {
       // Queue it if we're disconnected
-      this.pendingUtterances.push({ buffer: wavBuffer, timestamp });
+      this.pendingUtterances.push({ buffer: wavBuffer, speechStartMs, speechEndMs });
       
       // Keep queue manageable (drop oldest if too many)
       if (this.pendingUtterances.length > 20) {
@@ -193,7 +192,8 @@ export class MeetingWebSocketClient {
             type: 'audio',
             meeting_id: this.options.meetingId,
             sequence: this.sequence,
-            timestamp: item.timestamp
+            speech_start_ms: item.speechStartMs,
+            speech_end_ms: item.speechEndMs
           }));
           
           this.ws.send(item.buffer);

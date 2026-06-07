@@ -31,8 +31,8 @@ export default function AnalysisPage() {
     isSpeaking,
     error: vadError
   } = useVAD({
-    onUtterance: (wavBuffer) => {
-      sendUtterance(wavBuffer);
+    onUtterance: (wavBuffer, durationMs, speechStartMs, speechEndMs) => {
+      sendUtterance(wavBuffer, speechStartMs, speechEndMs);
     }
   });
 

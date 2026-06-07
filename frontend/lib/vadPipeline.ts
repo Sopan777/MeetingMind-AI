@@ -2,7 +2,7 @@ import { MicVAD } from '@ricky0123/vad-web';
 import { encodeWAV } from './wavEncoder';
 
 export interface VADPipelineOptions {
-  onUtterance: (wavBuffer: ArrayBuffer, durationMs: number) => void;
+  onUtterance: (wavBuffer: ArrayBuffer, durationMs: number, speechStartMs: number, speechEndMs: number) => void;
   onSpeechStart?: () => void;
   onSpeechEnd?: () => void;
   onMisfire?: () => void;
@@ -11,6 +11,7 @@ export interface VADPipelineOptions {
 export class VADPipeline {
   private vad: MicVAD | null = null;
   private options: VADPipelineOptions;
+  private currentSpeechStartMs: number = 0;
 
   constructor(options: VADPipelineOptions) {
     this.options = options;
@@ -23,37 +24,37 @@ export class VADPipeline {
         resumeStream: async () => stream,
         pauseStream: async () => {},
 
-        // Explicitly point to the static assets we copied to public/
         baseAssetPath: '/',
         onnxWASMBasePath: '/',
 
-        // Fix Next.js dynamic import error by disabling threaded WASM
         ortConfig: (ort) => {
           ort.env.wasm.numThreads = 1;
         },
 
-        // Tuning parameters for meeting transcription
         positiveSpeechThreshold: 0.8,
         negativeSpeechThreshold: 0.3,
-        minSpeechFrames: 5,        // Avoid tiny blips
-        redemptionFrames: 8,       // Allow small pauses in speech
-        preSpeechPadFrames: 3,     // Pad start slightly so we don't clip words
+        minSpeechFrames: 5,
+        redemptionFrames: 8,
+        preSpeechPadFrames: 3,
         submitUserSpeechOnPause: true,
 
         onSpeechStart: () => {
+          this.currentSpeechStartMs = Date.now();
           this.options.onSpeechStart?.();
         },
         onSpeechEnd: (audio: Float32Array) => {
+          const speechEndMs = Date.now();
           this.options.onSpeechEnd?.();
 
-          // @ricky0123/vad-web always returns audio as 16kHz float32
           const sampleRate = 16000;
           const wavBuffer = encodeWAV(audio, sampleRate);
           const durationMs = (audio.length / sampleRate) * 1000;
 
-          this.options.onUtterance(wavBuffer, durationMs);
+          this.options.onUtterance(wavBuffer, durationMs, this.currentSpeechStartMs, speechEndMs);
+          this.currentSpeechStartMs = 0;
         },
         onVADMisfire: () => {
+          this.currentSpeechStartMs = 0;
           this.options.onMisfire?.();
         }
       });

@@ -39,7 +39,7 @@ interface UseMeetingAnalysisReturn {
   isConnected: boolean;
   connect: (meetingId?: string) => void;
   disconnect: () => void;
-  sendUtterance: (wavBuffer: ArrayBuffer) => void;
+  sendUtterance: (wavBuffer: ArrayBuffer, speechStartMs: number, speechEndMs: number) => void;
   requestAnalysis: () => void;
 }
 
@@ -99,9 +99,9 @@ export function useMeetingAnalysis(): UseMeetingAnalysisReturn {
     setInsights(EMPTY_INSIGHTS);
   }, [cleanup]);
 
-  const sendUtterance = useCallback((wavBuffer: ArrayBuffer) => {
+  const sendUtterance = useCallback((wavBuffer: ArrayBuffer, speechStartMs: number, speechEndMs: number) => {
     if (clientRef.current) {
-      clientRef.current.sendUtterance(wavBuffer);
+      clientRef.current.sendUtterance(wavBuffer, speechStartMs, speechEndMs);
     }
   }, []);
 

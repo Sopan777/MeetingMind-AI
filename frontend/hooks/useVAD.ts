@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { VADPipeline } from '../lib/vadPipeline';
 
 interface UseVADOptions {
-  onUtterance: (wavBuffer: ArrayBuffer, durationMs: number) => void;
+  onUtterance: (wavBuffer: ArrayBuffer, durationMs: number, speechStartMs: number, speechEndMs: number) => void;
 }
 
 export function useVAD({ onUtterance }: UseVADOptions) {
@@ -16,7 +16,7 @@ export function useVAD({ onUtterance }: UseVADOptions) {
         vadPipelineRef.current = new VADPipeline({
           onSpeechStart: () => setIsSpeaking(true),
           onSpeechEnd: () => setIsSpeaking(false),
-          onUtterance: (buffer, duration) => onUtterance(buffer, duration),
+          onUtterance: (buffer, duration, startMs, endMs) => onUtterance(buffer, duration, startMs, endMs),
           onMisfire: () => setIsSpeaking(false),
         });
       }
